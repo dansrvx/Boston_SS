@@ -1,8 +1,13 @@
+import time
 import torch
+import torch.nn as nn
+import torch.optim as optim
 from BostonFiles import BostonFiles
 from BostonDataset import BostonDataset
 from BostonDataModule import BostonDataModule
 from SegmentationVisualizer import SegmentationVisualizer
+from Training import train_one_epoch
+from Validation import one_forward, validate_one_epoch
 from Unet import UNet
 import os
 
@@ -74,13 +79,44 @@ def main():
     masks = masks.to(device)
     logits = one_forward(model, images)
     visualizer.show_triplet(images[0], masks[0], logits[0], suptitle="Random test image & mask")
+    print("**-**-**-**-**-**-**-**-**-**-**-**")
+    print("\n")
+
+    # Define the training loop
+    print("**-**-**-**-**-**-**-**-**-**-**-**")
+    print("Define the training loop")
+    num_classes = len(BostonDataset.CLASSES)
+    loss_fn = nn.CrossEntropyLoss()  # expects logits + targets as long
+    optimizer = optim.Adam(model.parameters(), lr=1e-3)
+    train(1, 5, device, trn_loader, val_loader, model, optimizer, loss_fn)
+    print("**-**-**-**-**-**-**-**-**-**-**-**")
+    print("\n")
 
 
-def one_forward(model, images):
-    with torch.no_grad():  # no gradient calculation
-        logits = model(images)  # forward pass
-    print("Logits shape:", logits.shape)
-    return logits
+def train(num_epochs, patience, device, trn_loader, val_loader, model, optimizer, loss_fn):
+    num_epochs = 1
+    best_val_loss = float("inf")
+    patience = 5
+    wait = 0
+
+    for epoch in range(num_epochs):
+        train_loss = train_one_epoch(model, trn_loader, optimizer, loss_fn, device)
+        val_loss = validate_one_epoch(model, val_loader, loss_fn, device)
+
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            torch.save(model.state_dict(), "best_unet.pth")
+            wait = 0
+        else:
+            wait += 1
+
+        if wait >= patience:
+            print("Early stopping triggered!")
+            break
+
+    print("Training finished!")
+    print("**-**-**-**-**-**-**-**-**-**-**-**")
+    print("\n")
 
 
 if __name__ == '__main__':
