@@ -100,7 +100,7 @@ def train(num_epochs, patience, device, trn_loader, val_loader, model, optimizer
     wait = 0
 
     for epoch in range(num_epochs):
-        train_loss = train_one_epoch(model, trn_loader, optimizer, loss_fn, device)
+        train_loss = train_one_epoch(model, trn_loader, optimizer, loss_fn, device, print_every=1)
         val_loss = validate_one_epoch(model, val_loader, loss_fn, device)
 
         if val_loss < best_val_loss:
