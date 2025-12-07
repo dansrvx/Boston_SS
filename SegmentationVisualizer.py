@@ -8,18 +8,24 @@ class SegmentationVisualizer:
     Helper class to visualize semantic segmentation results.
 
     This class:
-    - Receives class names and a color map (class_name -> (R, G, B)).
-    - Can decode masks of class indices into RGB color images.
-    - Can display the original image, ground truth mask, and predicted mask
-      side by side.
+        - Receives class names and a color map (class_name -> (R, G, B)).
+        - Can decode masks of class indices into RGB color images.
+        - Can display:
+            * the original image
+            * the ground truth mask
+            * the predicted mask
+            * a match/mismatch map (green = correct, red = incorrect)
     """
 
     def __init__(self, class_names, class_color_map):
         """
+        Initialize the visualizer with class labels and colors.
+
         Args:
             class_names (list of str): List of class names. The index in this list
                 is the class index used in the masks (0..num_classes-1).
             class_color_map (dict): Mapping {class_name: (R, G, B)} for each class.
+                                    Color channels are expected in [0, 255].
         """
         self.class_names = class_names
         self.class_color_map = class_color_map
@@ -36,7 +42,9 @@ class SegmentationVisualizer:
         Convert an image tensor [C, H, W] or [H, W, C] into a numpy array
         [H, W, C] in range [0, 1] suitable for matplotlib.
 
-        Assumes the input tensor is already normalized to [0, 1] if [C, H, W].
+        Assumptions:
+            - If input is [C, H, W] and values are in [0, 1], they are used directly.
+            - If values are in [0, 255], they are normalized to [0, 1].
         """
         if isinstance(image_tensor, torch.Tensor):
             img = image_tensor.detach().cpu()
@@ -52,7 +60,7 @@ class SegmentationVisualizer:
                 img_np = img_np / 255.0
 
         else:
-            # If it is already a numpy array
+            # If it is already a numpy array or list-like
             img_np = np.array(image_tensor).astype("float32")
             if img_np.max() > 1.0:
                 img_np = img_np / 255.0
@@ -64,8 +72,11 @@ class SegmentationVisualizer:
     @staticmethod
     def _to_numpy_mask_indices(mask_tensor):
         """
-        Convert a mask tensor (either [H, W] of indices or [C, H, W] logits)
-        into a 2D numpy array [H, W] of class indices.
+        Convert a mask tensor into a 2D numpy array [H, W] of class indices.
+
+        Supported formats:
+            - [H, W] with integer class indices.
+            - [C, H, W] with logits or probabilities (argmax over channel dimension).
         """
         if isinstance(mask_tensor, torch.Tensor):
             mask = mask_tensor.detach().cpu()
@@ -110,51 +121,138 @@ class SegmentationVisualizer:
         h, w = mask_np.shape
         color_mask = np.zeros((h, w, 3), dtype=np.uint8)
 
+        # Assign RGB color for each class index
         for class_idx, color in enumerate(self.class_colors):
-            color_mask[mask_np == class_idx] = color  # color is (R, G, B)
+            color_mask[mask_np == class_idx] = color  # color is (R, G, B) in [0, 255]
 
         return color_mask
 
-    def show_triplet(self, image_tensor, true_mask_tensor, pred_mask_tensor=None,
-                     figsize=(15, 5), suptitle=None):
+    def _compute_match_mismatch_map(self, true_mask_tensor, pred_mask_tensor):
         """
-        Show the original image, the ground truth mask, and the predicted mask
-        side by side. If pred_mask_tensor is None, a blank black mask is shown.
+        Create a match/mismatch RGB map comparing ground truth and predictions.
+
+        For each pixel:
+            - Green  (0, 1, 0) if predicted class == true class.
+            - Red    (1, 0, 0) if predicted class != true class.
+
+        Args:
+            true_mask_tensor: Ground truth mask [H, W] or [C, H, W].
+            pred_mask_tensor: Predicted mask [H, W] or [C, H, W].
+
+        Returns:
+            diff_map (np.ndarray): Float RGB image [H, W, 3] in [0, 1].
+        """
+        true_indices = self._to_numpy_mask_indices(true_mask_tensor)
+        pred_indices = self._to_numpy_mask_indices(pred_mask_tensor)
+
+        if true_indices.shape != pred_indices.shape:
+            raise ValueError(
+                f"Shape mismatch between true and predicted masks: "
+                f"{true_indices.shape} vs {pred_indices.shape}"
+            )
+
+        h, w = true_indices.shape
+        diff_map = np.zeros((h, w, 3), dtype=np.float32)
+
+        # Boolean mask of correct predictions
+        match = (true_indices == pred_indices)
+
+        # Correct pixels → green
+        diff_map[match] = np.array([0.0, 1.0, 0.0], dtype=np.float32)
+        # Incorrect pixels → red
+        diff_map[~match] = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+
+        return diff_map
+
+    def show_triplet(
+        self,
+        image_tensor,
+        true_mask_tensor,
+        pred_mask_tensor=None,
+        figsize=(18, 5),
+        suptitle=None,
+    ):
+        """
+        Show the original image, the ground truth mask, the predicted mask,
+        and (if prediction is provided) a match/mismatch map.
+
+        If pred_mask_tensor is None:
+            - Only three panels are shown:
+                * Image
+                * Ground truth mask
+                * Blank predicted mask (black)
+        If pred_mask_tensor is not None:
+            - Four panels are shown:
+                * Image
+                * Ground truth mask
+                * Predicted mask
+                * Match/mismatch (green = correct, red = incorrect)
+
+        Args:
+            image_tensor: Input image [C, H, W], [H, W, C], or numpy array.
+            true_mask_tensor: Ground truth mask [H, W] or [C, H, W].
+            pred_mask_tensor: Predicted mask [H, W] or [C, H, W], or None.
+            figsize: Figure size for matplotlib.
+            suptitle: Optional global title for the figure.
         """
 
-        # Convert image
+        # --------------------------------------------------------------
+        # Prepare input image for visualization
+        # --------------------------------------------------------------
         img_np = self._to_numpy_image(image_tensor)
 
-        # Ground truth mask (decoded to color)
-        true_color = self.decode_mask_to_color(true_mask_tensor)
-        true_color = true_color.astype("float32") / 255.0
+        # Ground truth mask (decoded to color, normalized to [0, 1])
+        true_color = self.decode_mask_to_color(true_mask_tensor).astype("float32") / 255.0
 
-        # Handle predicted mask
+        # --------------------------------------------------------------
+        # Handle predicted mask and match/mismatch map
+        # --------------------------------------------------------------
         if pred_mask_tensor is None:
             # Create a black mask same size as true_mask
-            h, w = true_mask_tensor.shape
+            h, w = self._to_numpy_mask_indices(true_mask_tensor).shape
             pred_color = np.zeros((h, w, 3), dtype="float32")  # all black
+            diff_map = None
+            num_panels = 3
         else:
-            pred_color = self.decode_mask_to_color(pred_mask_tensor)
-            pred_color = pred_color.astype("float32") / 255.0
+            pred_color = self.decode_mask_to_color(pred_mask_tensor).astype("float32") / 255.0
+            diff_map = self._compute_match_mismatch_map(true_mask_tensor, pred_mask_tensor)
+            num_panels = 4
 
-        # Plot
-        fig, axes = plt.subplots(1, 3, figsize=figsize)
+        # --------------------------------------------------------------
+        # Create subplots: 3 or 4 depending on whether we have predictions
+        # --------------------------------------------------------------
+        fig, axes = plt.subplots(1, num_panels, figsize=figsize)
+
+        # When num_panels == 3, axes is an array of length 3
+        # When num_panels == 4, axes is an array of length 4
+        if num_panels == 3:
+            ax_img, ax_true, ax_pred = axes
+        else:
+            ax_img, ax_true, ax_pred, ax_diff = axes
 
         # Original image
-        axes[0].imshow(img_np)
-        axes[0].set_title("Image")
-        axes[0].axis("off")
+        ax_img.imshow(img_np)
+        ax_img.set_title("Image")
+        ax_img.axis("off")
 
         # Ground truth mask
-        axes[1].imshow(true_color)
-        axes[1].set_title("Ground truth mask")
-        axes[1].axis("off")
+        ax_true.imshow(true_color)
+        ax_true.set_title("Ground truth mask")
+        ax_true.axis("off")
 
         # Predicted mask or blank
-        axes[2].imshow(pred_color)
-        axes[2].set_title("Predicted mask" if pred_mask_tensor is not None else "Predicted mask (blank)")
-        axes[2].axis("off")
+        ax_pred.imshow(pred_color)
+        if pred_mask_tensor is not None:
+            ax_pred.set_title("Predicted mask")
+        else:
+            ax_pred.set_title("Predicted mask (blank)")
+        ax_pred.axis("off")
+
+        # Match/mismatch map (only if we have predictions)
+        if pred_mask_tensor is not None and diff_map is not None:
+            ax_diff.imshow(diff_map)
+            ax_diff.set_title("Match / Mismatch\n(green = correct, red = wrong)")
+            ax_diff.axis("off")
 
         if suptitle is not None:
             fig.suptitle(suptitle)
