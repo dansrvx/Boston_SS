@@ -1,5 +1,5 @@
 import os
-import time
+from datetime import datetime
 import random
 import torch
 import torch.nn as nn
@@ -198,27 +198,30 @@ def run_experiment(
     # ------------------------------------------------------------
     # 8) Save training history & Model
     # ------------------------------------------------------------
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     # Save Metrics
-    excel_filename = f"training_metrics_{experiment_name}.xlsx"
+    excel_filename = f"training_metrics_{experiment_name}_{timestamp}.xlsx"
     excel_path = os.path.join(current_path, excel_filename)
     history_df.to_excel(excel_path, index=False)
     print(f"[{experiment_name}] Metrics saved to: {excel_path}")
 
     # Rename the best model to include experiment name (train function saves as 'best_unet.pth')
     default_model_name = "best_unet.pth"
-    specific_model_name = f"best_unet_{experiment_name}.pth"
+    specific_model_name = f"best_unet_{experiment_name}_{timestamp}.pth"
+    specific_model_path = os.path.join(current_path, specific_model_name)
 
     if os.path.exists(default_model_name):
-        os.rename(default_model_name, specific_model_name)
+        os.rename(default_model_name, specific_model_path)
         print(f"[{experiment_name}] Best model renamed to: {specific_model_name}")
+    else:
+        print(f"[{experiment_name}] WARNING: {default_model_name} not found. Model might not have been saved.")
 
     # ------------------------------------------------------------
     # 9) Reload best model and visualize a random test example
     # ------------------------------------------------------------
     _print_section(f"[{experiment_name}] Visualizing random validation sample with best model")
 
-    model_path = os.path.join(current_path, specific_model_name)
-    best_model = load_best_model(model_path=model_path, device=device)
+    best_model = load_best_model(model_path=specific_model_path, device=device)
 
     visualize_random_example(
         model=best_model,
@@ -274,7 +277,6 @@ def main():
     # ------------------------------------------------------------
 
     # FLOW 1: Baseline (No Augmentation)
-    ''' 
     loss_no_aug = run_experiment(
         experiment_name="no_aug",
         use_augmentation=False,
@@ -282,7 +284,7 @@ def main():
         device=device,
         current_path=current_path
     )
-    '''
+
 
     # FLOW 2: With Data Augmentation
     loss_with_aug = run_experiment(
@@ -296,7 +298,6 @@ def main():
     # ------------------------------------------------------------
     # Final Comparison
     # ------------------------------------------------------------
-    '''
     _print_section("Final Results Comparison")
     print(f"Best Val Loss (No Aug)  : {loss_no_aug:.4f}")
     print(f"Best Val Loss (With Aug): {loss_with_aug:.4f}")
@@ -305,7 +306,7 @@ def main():
         print("\nConclusion: Data Augmentation improved performance.")
     else:
         print("\nConclusion: Data Augmentation did not improve performance (or needs tuning).")
-    '''
+
 
 if __name__ == "__main__":
     main()

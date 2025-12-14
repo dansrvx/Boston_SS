@@ -1,10 +1,8 @@
 import os
 import glob
-import random
 
 import numpy as np
 from PIL import Image
-import matplotlib.pyplot as plt
 
 import torch
 from torch.utils.data import Dataset
