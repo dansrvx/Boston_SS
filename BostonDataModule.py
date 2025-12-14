@@ -1,6 +1,8 @@
 import torch
 from BostonDataset import BostonDataset
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader, random_split, Dataset
+from torchvision import tv_tensors
+
 
 class BostonDataModule:
     def __init__(self,
@@ -13,6 +15,7 @@ class BostonDataModule:
                  transform=None,
                  target_transform=None,
                  seed: int = 42,
+                 train_transform=None,
                  ):
         self.dataset = dataset
         self.batch_size = batch_size
@@ -23,6 +26,7 @@ class BostonDataModule:
         self.transform = transform
         self.target_transform = target_transform
         self.seed = seed
+        self.train_transform = train_transform
 
         self.train_dataset = None
         self.val_dataset = None
@@ -54,11 +58,20 @@ class BostonDataModule:
         # 3. Perform a deterministic random split using a fixed seed
         generator = torch.Generator().manual_seed(self.seed)
 
-        self.train_dataset, self.val_dataset, self.test_dataset = random_split(
+        train_subset, val_subset, test_subset = random_split(
             self.dataset,
             lengths=[train_size, val_size, test_size],
             generator=generator
         )
+
+        # 4. # If there is a training transform, wrap ONLY the training set
+        if self.train_transform:
+            self.train_dataset = TransformedDataset(train_subset, transform=self.train_transform)
+        else:
+            self.train_dataset = train_subset
+        self.val_dataset = val_subset
+        self.test_dataset = test_subset
+
         self._create_dataloaders()
 
     def _create_dataloaders(self):
@@ -111,6 +124,33 @@ class BostonDataModule:
         """
         return self.train_dataset, self.val_dataset, self.test_dataset
 
+
+class TransformedDataset(Dataset):
+    """
+    Wraps a dataset (or subset) and applies an additional transformation
+    when retrieving an item.
+    """
+
+    def __init__(self, subset, transform=None):
+        self.subset = subset
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.subset)
+
+    def __getitem__(self, idx):
+        img, msk = self.subset[idx]
+
+        # Apply transformation if it exists
+        if self.transform:
+            img_wrapped = tv_tensors.Image(img)
+            mask_wrapped = tv_tensors.Mask(msk)
+            img_wrapped, mask_wrapped = self.transform(img_wrapped, mask_wrapped)
+
+            # torchvision v2 expects (image, mask) or similar to transform them together
+            return img_wrapped, mask_wrapped
+
+        return img, msk
 
 
 
