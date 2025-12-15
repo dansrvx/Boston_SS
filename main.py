@@ -14,6 +14,8 @@ from Execution import train
 from Validation import one_forward
 from Unet import UNet
 
+import segmentation_models_pytorch as smp
+
 
 def _print_section(title: str):
     """
@@ -59,19 +61,37 @@ def get_training_augmentation():
         ),
     ])
 
-def load_best_model(model_path: str, device: str | torch.device) -> torch.nn.Module:
+
+def load_best_model(model_path: str, device: str | torch.device, encoder_name: str | None = None) -> torch.nn.Module:
     """
     Load the best saved U-Net model from disk.
+
+    Args:
+        model_path: Path to the .pth file.
+        device: 'cpu' or 'cuda'.
+        encoder_name: None for custom UNet (default), or 'resnet34' for SMP based models.
     """
     device = torch.device(device)
     num_classes = len(BostonDataset.CLASSES)
-    model = UNet(in_channels=3, num_classes=num_classes)
+
+    if encoder_name is None:
+        model = UNet(in_channels=3, num_classes=num_classes)
+    elif encoder_name == "resnet34":
+        model = smp.Unet(
+            encoder_name="resnet34",
+            encoder_weights=None,
+            in_channels=3,
+            classes=num_classes
+        )
+    else:
+        raise ValueError(f"Encoder '{encoder_name}' unknown.")
+
     state_dict = torch.load(model_path, map_location=device)
     model.load_state_dict(state_dict)
+
     model.to(device)
     model.eval()
     return model
-
 
 def visualize_random_example(
         model: torch.nn.Module,
@@ -111,7 +131,8 @@ def run_experiment(
         use_augmentation: bool,
         dataset: BostonDataset,
         device: torch.device,
-        current_path: str
+        current_path: str,
+        encoder_name: str = None
 ):
     """
     Encapsulates the full training and validation lifecycle for a specific experiment configuration.
@@ -165,11 +186,23 @@ def run_experiment(
     # ------------------------------------------------------------
     # 6) Define U-Net model
     # ------------------------------------------------------------
-    _print_section(f"[{experiment_name}] Defining U-Net model")
+    _print_section(f"[{experiment_name}] Defining model")
 
     num_classes = len(BostonDataset.CLASSES)
-    # Re-initialize model for every experiment to start with fresh weights
-    model = UNet(in_channels=3, num_classes=num_classes).to(device)
+
+    if encoder_name is None:
+        # --- OPTION 1: (Custom U-Net) ---
+        print(f"[{experiment_name}] Using Custom U-Net (from Unet.py)")
+        model = UNet(in_channels=3, num_classes=num_classes).to(device)
+    else:
+        # --- OPTION 2: Pre-Trained Model (SMP) ---
+        print(f"[{experiment_name}] Using Pre-trained SMP U-Net with backbone: {encoder_name}")
+        model = smp.Unet(
+            encoder_name=encoder_name,  # ej: "resnet34", "vgg16"
+            encoder_weights="imagenet",  # pre-trained weighs
+            in_channels=3,
+            classes=num_classes,
+        ).to(device)
 
     # ------------------------------------------------------------
     # 7) Define loss, optimizer and launch training loop
@@ -178,13 +211,16 @@ def run_experiment(
 
     # Define class weights: [sky, water, bridge, obstacle, living_obs, background, self]
     # Assign low weight to frequent classes and MUCH higher weight to rare ones.
-    class_weights = torch.tensor([1.0, 1.0, 5.0, 20.0, 20.0, 1.0, 5.0]).to(device)
+    # class_weights = torch.tensor([1.0, 1.0, 5.0, 20.0, 20.0, 1.0, 5.0]).to(device)
+    # Softer class weights
+    class_weights = torch.tensor([1.0, 1.0, 2.0, 5.0, 5.0, 1.0, 2.0]).to(device)
+
 
     # Pass the class weights to the loss function
     loss_fn = nn.CrossEntropyLoss(weight=class_weights)
     optimizer = optim.Adam(model.parameters(), lr=1e-3)
 
-    num_epochs = 40
+    num_epochs = 50
     patience = 10
 
     best_val_loss, history_df = train(
@@ -225,8 +261,10 @@ def run_experiment(
     # 9) Reload best model and visualize a random test example
     # ------------------------------------------------------------
     _print_section(f"[{experiment_name}] Visualizing random validation sample with best model")
-
-    best_model = load_best_model(model_path=specific_model_path, device=device)
+    if encoder_name == "resnet34":
+        best_model = load_best_model(model_path=specific_model_path, device=device, encoder_name=encoder_name)
+    else:
+        best_model = load_best_model(model_path=specific_model_path, device=device)
 
     visualize_random_example(
         model=best_model,
@@ -300,18 +338,23 @@ def main():
         current_path=current_path
     )
 
+    # FLOW 3: SOTA Pre-trained
+    loss_pretrained = run_experiment(
+        experiment_name="pretrained_resnet34",
+        use_augmentation=True,
+        dataset=dataset,
+        device=device,
+        current_path=current_path,
+        encoder_name="resnet34"  # <--- PRE-TRAINED MODEL ACTIVATED
+    )
+
     # ------------------------------------------------------------
     # Final Comparison
     # ------------------------------------------------------------
     _print_section("Final Results Comparison")
-    print(f"Best Val Loss (No Aug)  : {loss_no_aug:.4f}")
-    print(f"Best Val Loss (With Aug): {loss_with_aug:.4f}")
-
-    if loss_with_aug < loss_no_aug:
-        print("\nConclusion: Data Augmentation improved performance.")
-    else:
-        print("\nConclusion: Data Augmentation did not improve performance (or needs tuning).")
-
+    print(f"Custom UNet (No Aug)   : {loss_no_aug:.4f}")
+    print(f"Custom UNet (With Aug) : {loss_with_aug:.4f}")
+    print(f"Pre-trained ResNet34   : {loss_pretrained:.4f}")
 
 if __name__ == "__main__":
     main()
