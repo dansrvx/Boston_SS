@@ -176,7 +176,12 @@ def run_experiment(
     # ------------------------------------------------------------
     _print_section(f"[{experiment_name}] Starting training")
 
-    loss_fn = nn.CrossEntropyLoss()
+    # Define class weights: [sky, water, bridge, obstacle, living_obs, background, self]
+    # Assign low weight to frequent classes and MUCH higher weight to rare ones.
+    class_weights = torch.tensor([1.0, 1.0, 5.0, 20.0, 20.0, 1.0, 5.0]).to(device)
+
+    # Pass the class weights to the loss function
+    loss_fn = nn.CrossEntropyLoss(weight=class_weights)
     optimizer = optim.Adam(model.parameters(), lr=1e-3)
 
     num_epochs = 40
